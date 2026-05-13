@@ -1,0 +1,20 @@
+robot:
+  can_interface: "can0"
+
+  # Move speed as percentage 0-100 (applied to all motions).
+  # Start low — increase only after verifying motion is correct.
+  speed_pct: 20
+
+  # How far above the target to hover before descending (metres)
+  approach_clearance_m: 0.10
+
+  # Gripper open distance in mm (Piper finger gripper max ~70 mm)
+  gripper_open_mm: 70.0
+  # Grip force in N/m (0–5 N/m → 0–5000 in SDK units)
+  gripper_effort_nm: 1.5
+
+  # Drop zone in robot base frame (metres). Tune to your physical setup.
+  drop_zone_xyz_m: [0.35, -0.20, 0.15]
+
+  # Safe home joint angles (degrees). Arm folds upright.
+  home_joints_deg: [0.0, 90.0, -90.0, 0.0, 0.0, 0.0]
