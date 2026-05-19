@@ -14,7 +14,9 @@ Unit note
   get_joint_states().  To convert: degrees = radians × (180 / π)
 """
 
-import sys
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import time
 from robot_controller import RobotController
 from robot_logger import RobotLogger

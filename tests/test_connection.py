@@ -6,6 +6,9 @@ Usage:
     bash setup_can.sh && python3 test_connection.py
 """
 
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import time
 from piper_sdk import C_PiperInterface
 from robot_logger import RobotLogger
