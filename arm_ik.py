@@ -56,6 +56,9 @@ class PiperIK:
         analytical constraint and does not need a recorded reference."""
         del joints_deg
 
+    _IK_XY_TOL = 0.015  # metres — FK verification tolerance in XY
+    _IK_Z_TOL  = 0.010  # metres — FK verification tolerance in Z
+
     def solve_down(self, x: float, y: float, z: float,
                    seed_deg: list[float]) -> list[float]:
         """IK to (x, y, z) with gripper forced to point straight down.
@@ -64,10 +67,23 @@ class PiperIK:
         in the world -Z direction. Only one axis is constrained so the IK
         remains free to choose jaw rotation, giving much better convergence
         than orientation_mode='all'.
+
+        Raises RuntimeError if FK verification of the solution misses the
+        target by more than _IK_XY_TOL / _IK_Z_TOL — catches bad IK solutions
+        before the arm moves.
         """
-        return self.solve(x, y, z, seed_deg=seed_deg,
-                          orientation=np.array([0.0, 0.0, -1.0]),
-                          orientation_mode="Y")
+        joints = self.solve(x, y, z, seed_deg=seed_deg,
+                            orientation=np.array([0.0, 0.0, -1.0]),
+                            orientation_mode="Y")
+        fk = self.fk(joints)
+        ex, ey, ez = abs(fk[0] - x), abs(fk[1] - y), abs(fk[2] - z)
+        if ex > self._IK_XY_TOL or ey > self._IK_XY_TOL or ez > self._IK_Z_TOL:
+            raise RuntimeError(
+                f"IK solution failed FK verification — target ({x:.4f}, {y:.4f}, {z:.4f}) "
+                f"FK result ({fk[0]:.4f}, {fk[1]:.4f}, {fk[2]:.4f}) "
+                f"error (x={ex*1000:.1f}mm y={ey*1000:.1f}mm z={ez*1000:.1f}mm)"
+            )
+        return joints
 
     # ------------------------------------------------------------------
     # Single-point IK (ikpy)

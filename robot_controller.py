@@ -1,6 +1,9 @@
 """
 AgileX Piper 6-DOF arm controller.
 
+Before running any script:
+    bash setup_can.sh && python tests/test_connection.py
+
 SDK unit conventions (verified from piper_sdk 0.6.1 source):
   EndPoseCtrl  — X/Y/Z in 0.001 mm   → metres × 1_000_000
   JointCtrl    — angles in 0.001 deg  → degrees × 1_000
@@ -13,7 +16,7 @@ J1: [-150°, 150°]
 J2: [  0°,  180°]
 J3: [-170°,   0°]
 J4: [-100°, 100°]
-J5: [ -70°,  70°] 
+J5: [ -70°,  70°]
 J6: [-120°, 120°]
 
 """
@@ -76,9 +79,12 @@ class RobotController:
         """Move joints to home one at a time: wrist first, base last."""
         self._move_sequential(self._home_joints_deg)
 
+    _GRIPPER_MAX_MM = 70  # hardware maximum opening
+
     def open_gripper(self):
-        self._arm.GripperCtrl(self._gripper_open, int(1.5 * 1_000), 0x01, 0)
-        time.sleep(0.5)
+        # Max effort (5 N/m) so fingers reach full extension against spring tension
+        self._arm.GripperCtrl(self._GRIPPER_MAX_MM * 1_000, int(5.0 * 1_000), 0x01, 0)
+        time.sleep(0.8)
 
     def close_gripper(self):
         # Stage 1: close to soft contact so fingers touch the wing before squeezing
@@ -94,26 +100,27 @@ class RobotController:
             raise ValueError("Need exactly 6 joint angles")
         self._move_sequential(degrees)
 
-    def move_cartesian(self, x_m: float, y_m: float, z_m: float,
-                       rx_deg: float | None = None, ry_deg: float | None = None, rz_deg: float | None = None,
-                       timeout: float = 15.0):
-        """Move end-effector in a straight Cartesian line (Move L).
+    def stroke(self, x_m: float, y_m: float, z_m: float,
+               rx_deg: float | None = None, ry_deg: float | None = None, rz_deg: float | None = None,
+               timeout: float = 15.0):
+        """Move the tool tip in a straight Cartesian line (Move L).
 
         Sends the command ONCE and waits for the firmware to complete the move.
         rx/ry/rz default to the arm's current orientation so the gripper does
         not rotate during the move — pass explicit values to change orientation.
 
         Only suitable for short moves (<~15 cm). For large workspace traversals
-        use move_straight_line() instead.
+        use transit() instead.
         """
-        # Default orientation = current, so the gripper stays facing the same way
+        self._set_cartesian_mode()
+        # Read orientation AFTER mode switch — gives firmware time to update
+        # its Cartesian state from the previous joint-mode transit.
         if rx_deg is None or ry_deg is None or rz_deg is None:
             p = self._arm.GetArmEndPoseMsgs().end_pose
             rx_deg = p.RX_axis / 1_000
             ry_deg = p.RY_axis / 1_000
             rz_deg = p.RZ_axis / 1_000
 
-        self._set_cartesian_mode()
         self._send_end_pose_and_wait(x_m, y_m, z_m, rx_deg, ry_deg, rz_deg, "Move L", timeout)
 
     _STEP_M = 0.04  # max distance per single Move L segment (metres)
@@ -128,6 +135,8 @@ class RobotController:
         Orientation is locked to the current pose at the start of the move
         (or to the explicitly supplied rx/ry/rz) and held fixed throughout.
         """
+        self._set_cartesian_mode()  # mode switch first — firmware syncs Cartesian state
+        # Read position and orientation AFTER mode switch so values reflect current joints
         p = self._arm.GetArmEndPoseMsgs().end_pose
         if rx_deg is None or ry_deg is None or rz_deg is None:
             rx_deg = p.RX_axis / 1_000
@@ -146,10 +155,23 @@ class RobotController:
         xs = np.linspace(cx, x_m, n + 1)[1:]
         ys = np.linspace(cy, y_m, n + 1)[1:]
         zs = np.linspace(cz, z_m, n + 1)[1:]
-
-        self._set_cartesian_mode()  # mode switch once, not per segment
         for sx, sy, sz in zip(xs, ys, zs):
             self._send_end_pose_and_wait(sx, sy, sz, rx_deg, ry_deg, rz_deg, "Move L", timeout)
+
+    def move_vertical(self, x_m: float, y_m: float, z_m: float):
+        """Move gripper tip to (x, y, z) pointing straight down, via IK + joint-space control.
+
+        Use for short vertical descents and ascents. More reliable than Move L
+        for positions near joint limits or after joint-mode transits.
+        """
+        seed = self._get_current_joints_deg()
+        joints = self._ik.solve_down(x_m, y_m, z_m, seed_deg=seed)
+        # J6 (jaw rotation) is unconstrained by solve_down. If IK chose a J6
+        # more than 45° away from current, it found a spurious revolution —
+        # snap it back to the seed value to prevent unnecessary spinning.
+        if abs(joints[5] - seed[5]) > 45:
+            joints[5] = seed[5]
+        self._move_joints_simultaneous(joints)
 
     def pick_and_drop(self, robot_xyz: np.ndarray, safe_joints: list[float],
                       return_home: bool = True) -> bool:
@@ -157,79 +179,54 @@ class RobotController:
 
         robot_xyz:   pick point in robot base frame (metres)
         safe_joints: joint angles of the approach endpoint — used as the safe
-                     transit position before/after each pick attempt.
+                     transit position before/after the pick.
         return_home: if False, arm stops after drop — caller plays retreat sequence.
-        Returns True if wing was picked and dropped, False on grasp failure.
 
         Motion plan
         -----------
-        1. IK solve_down → joint angles directly above pick at approach-endpoint height
-        2. move_straight_line (J1 first) → hover above pick, gripper pointing down
-        3. Move L straight down → pick point
-        4. Close gripper, Move L partial lift → verify
-        5. move_straight_line (J1 first) back to approach endpoint
-        6. IK solve_down + move_straight_line → above drop zone
-        7. Move L descend → release
+        1. IK solve_down → hover joints directly above pick at z + approach_clearance
+        2. transit (J1 first) → hover, gripper pointing down
+        3. stroke straight down → pick point
+        4. Close gripper, stroke partial lift
+        5. transit (J1 first) back to approach endpoint
+        6. IK solve_down + transit → above drop zone
+        7. stroke descend → open gripper → release
         """
         x, y, z = float(robot_xyz[0]), float(robot_xyz[1]), float(robot_xyz[2])
-        sink     = self._descend_sink_m
-        verify_h = self._verify_lift_m
         dx, dy, dz = self._drop_xyz.tolist()
 
-        # Use approach-endpoint height as hover height — known reachable, no workspace guessing
-        hover_z = self._arm.GetArmEndPoseMsgs().end_pose.Z_axis / 1_000_000
-
-        # Pre-compute hover joints: gripper down, directly above pick point
+        hover_z = z + self._approach_m
         hover_joints = self._ik.solve_down(x, y, hover_z, seed_deg=list(safe_joints))
-        print(f"  Hover position: ({x:.4f}, {y:.4f}, {hover_z:.4f})  gripper-down IK solved")
+        print(f"  Hover: ({x:.4f}, {y:.4f}, {hover_z:.4f})")
 
-        for attempt in range(2):
-            self.open_gripper()
+        self.open_gripper()
 
-            print(f"  [attempt {attempt + 1}] Moving to hover above pick (J1 first)")
-            self.move_straight_line(hover_joints)   # J1 rotates first, then arm positions gripper-down
+        print("  Moving to hover above pick (J1 first)")
+        self.transit(hover_joints)
 
-            print(f"  [attempt {attempt + 1}] Descending to pick point ({x:.4f}, {y:.4f}, {z - sink:.4f})")
-            self.move_cartesian(x, y, z - sink)     # Move L straight down — orientation locked from hover
-            if not self._reached(x, y, z - sink):
-                print(f"  Grasp attempt {attempt + 1} aborted — did not reach pick position")
-                self.move_straight_line(safe_joints)
-                if attempt == 1:
-                    self.home()
-                    return False
-                continue
+        print(f"  Descending to pick ({x:.4f}, {y:.4f}, {z - self._descend_sink_m:.4f})")
+        self.stroke(x, y, z - self._descend_sink_m)
 
-            self.close_gripper()
-            time.sleep(0.3)
+        self.close_gripper()
+        time.sleep(0.3)
 
-            print(f"  [attempt {attempt + 1}] Partial lift to verify grasp")
-            self.move_cartesian(x, y, z + verify_h) # Move L short lift to check grip
-            if self._is_holding():
-                print("  Grasp confirmed.")
-                break
-
-            print(f"  Grasp attempt {attempt + 1} failed — returning to approach endpoint")
-            self.move_straight_line(safe_joints)
-            if attempt == 1:
-                print("  WARNING: Grasp failed after retry — aborting")
-                self.home()
-                return False
+        print("  Lifting")
+        self.stroke(x, y, z + self._verify_lift_m)
 
         print("  Returning to approach endpoint (J1 first)")
-        self.move_straight_line(safe_joints)
+        self.transit(safe_joints)
 
-        # Solve gripper-down IK above drop zone, J1 first
         seed = self._get_current_joints_deg()
         drop_hover_joints = self._ik.solve_down(dx, dy, dz + self._approach_m, seed_deg=seed)
-        print(f"  Moving to above drop zone (J1 first, gripper down)")
-        self.move_straight_line(drop_hover_joints)
+        print("  Moving to above drop zone (J1 first)")
+        self.transit(drop_hover_joints)
 
-        print(f"  Descending to drop height ({dx:.4f}, {dy:.4f}, {dz:.4f})")
-        self.move_cartesian(dx, dy, dz)             # Move L descend to release height
-        if not self._reached(dx, dy, dz):
-            print("  WARNING: Did not reach drop height — releasing at current position")
+        print(f"  Descending to drop ({dx:.4f}, {dy:.4f}, {dz:.4f})")
+        self.stroke(dx, dy, dz)
+
         self.open_gripper()
         time.sleep(0.2)
+
         if return_home:
             self.home()
         return True
@@ -263,7 +260,7 @@ class RobotController:
         """
         seed   = seed_deg if seed_deg else self._get_current_joints_deg()
         target = self._ik.solve_down(x, y, z + offset_m, seed_deg=seed)
-        self.move_straight_line(target)
+        self.transit(target)
 
     def hover_lateral(self, x: float, y: float,
                       seed_deg: list[float] | None = None):
@@ -276,10 +273,10 @@ class RobotController:
         current_z = self._arm.GetArmEndPoseMsgs().end_pose.Z_axis / 1_000_000
         seed      = seed_deg if seed_deg else self._get_current_joints_deg()
         target    = self._ik.solve_down(x, y, current_z, seed_deg=seed)
-        self.move_straight_line(target)
+        self.transit(target)
 
-    def move_straight_line(self, seed_end_deg: list[float]):
-        """Two-phase transit to seed_end_deg.
+    def transit(self, seed_end_deg: list[float]):
+        """Two-phase joint-space move to seed_end_deg.
 
         Phase 1: rotate base (J1) only to the target J1 angle — arm swings
                  at constant height since J2-J6 don't change.
@@ -370,10 +367,15 @@ class RobotController:
     def _move_joints_simultaneous(self, target_deg: list, tolerance: float = 8.0, timeout: float = 40.0):
         """Send all 6 joint targets at once and wait until all arrive.
 
+        Exits when either:
+          - all joints are within tolerance of target, OR
+          - joints have not moved more than 0.2° across 10 consecutive reads (arm settled)
         Warns on timeout instead of raising so the sequence continues.
         """
-        deadline = time.time() + timeout
-        actual   = target_deg
+        deadline   = time.time() + timeout
+        actual     = target_deg
+        prev       = None
+        still_count = 0
         while time.time() < deadline:
             self._set_joint_mode()
             self._arm.JointCtrl(*[int(d * 1_000) for d in target_deg])
@@ -381,6 +383,13 @@ class RobotController:
             actual = self._get_current_joints_deg()
             if all(abs(actual[i] - target_deg[i]) < tolerance for i in range(6)):
                 return
+            if prev is not None and all(abs(actual[i] - prev[i]) < 0.2 for i in range(6)):
+                still_count += 1
+                if still_count >= 10:
+                    return
+            else:
+                still_count = 0
+            prev = list(actual)
         # Log which joints missed and by how much, then continue
         misses = [
             f"J{i+1} target={target_deg[i]:.1f}° actual={actual[i]:.1f}° err={abs(actual[i]-target_deg[i]):.1f}°"
@@ -431,37 +440,40 @@ class RobotController:
             int(ry_deg * 1_000),
             int(rz_deg * 1_000),
         )
-        time.sleep(0.4)
-        last_z = None
+        time.sleep(0.5)
+        last_pos = None
         still_count = 0
         deadline = time.time() + timeout
         while time.time() < deadline:
             time.sleep(0.05)
             s = self._arm.GetArmStatus().arm_status
             p = self._arm.GetArmEndPoseMsgs().end_pose
-            cur_z = p.Z_axis
+            cur_pos = (p.X_axis, p.Y_axis, p.Z_axis)
 
-            if s.arm_status == 4:
-                moved = (abs(p.X_axis - start_x) > 500 or   # >0.5 mm
-                         abs(p.Y_axis - start_y) > 500 or
-                         abs(p.Z_axis - start_z) > 500)
-                if not moved:
-                    self._report_joint_limits(label, s)
-                    return
+            # 2 mm threshold — mode-switch drift is typically <0.5 mm
+            moved_from_start = (abs(p.X_axis - start_x) > 2_000 or
+                                abs(p.Y_axis - start_y) > 2_000 or
+                                abs(p.Z_axis - start_z) > 2_000)
 
-            if s.motion_status == 0:
+            if s.arm_status == 4 and not moved_from_start:
+                self._report_joint_limits(label, s)
                 return
-            if (abs(p.X_axis / 1_000_000 - x_m) < 0.005 and
-                abs(p.Y_axis / 1_000_000 - y_m) < 0.005 and
-                abs(p.Z_axis / 1_000_000 - z_m) < 0.005):
-                return
-            if last_z is not None and abs(cur_z - last_z) < 100:
-                still_count += 1
-                if still_count >= 5:
+
+            # Only check convergence / stall AFTER the arm has genuinely started
+            # moving (>2 mm from start).  motion_status is not used — it is
+            # unreliable immediately after a mode switch or GripperCtrl command.
+            if moved_from_start:
+                if (abs(p.X_axis / 1_000_000 - x_m) < 0.005 and
+                    abs(p.Y_axis / 1_000_000 - y_m) < 0.005 and
+                    abs(p.Z_axis / 1_000_000 - z_m) < 0.005):
                     return
-            else:
-                still_count = 0
-            last_z = cur_z
+                if last_pos is not None and all(abs(cur_pos[i] - last_pos[i]) < 100 for i in range(3)):
+                    still_count += 1
+                    if still_count >= 10:  # 500 ms of no movement after arm started
+                        return
+                else:
+                    still_count = 0
+            last_pos = cur_pos
         print(f"  WARNING: {label} did not reach target within timeout — continuing")
 
     def _set_joint_mode(self):

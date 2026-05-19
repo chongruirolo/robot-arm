@@ -6,7 +6,7 @@ robot:
   speed_pct: 10
 
   # How far above the target to hover before descending (metres)
-  approach_clearance_m: 0.05
+  approach_clearance_m: 0.09
 
   # Gripper open distance in mm (Piper finger gripper max ~70 mm)
   gripper_open_mm: 70.0
@@ -21,7 +21,7 @@ robot:
   verify_lift_m: 0.03
 
   # Drop zone in robot base frame (metres). Tune to your physical setup.
-  drop_zone_xyz_m: [-0.0066, -0.4797, 0.1525]
+  drop_zone_xyz_m: [-0.0321, -0.4006, 0.1619]
 
   # Safe home joint angles (degrees). Arm rests low under gravity.
   home_joints_deg: [0.0, 2.0, 0.0, 0.0, 27.0, -110.0]

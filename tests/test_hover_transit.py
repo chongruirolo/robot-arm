@@ -84,9 +84,9 @@ with RobotController() as arm:
     arm._move_joints_simultaneous(HOVER_PICK)
 
     input("\n[2/3] Transit hover_pick → hover_drop — Press Enter to run ... ")
-    arm.move_straight_line(HOVER_DROP)
+    arm.transit(HOVER_DROP)
 
     input("\n[3/3] Return hover_drop → hover_pick — Press Enter to run ... ")
-    arm.move_straight_line(HOVER_PICK)
+    arm.transit(HOVER_PICK)
 
 print("\nDone.")

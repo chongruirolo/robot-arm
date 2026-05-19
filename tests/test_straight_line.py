@@ -1,5 +1,5 @@
 """
-Unit test for move_straight_line().
+Unit test for transit().
 
 Moves the arm 10 cm straight down from its current position, then back up.
 Logs X, Y, Z at every waypoint — if the path is truly straight, X and Y
@@ -19,7 +19,7 @@ import time
 from robot_controller import RobotController
 from arm_ik import PiperIK
 
-print("move_straight_line() unit test")
+print("transit() unit test")
 print("Arm will move 10 cm DOWN then 10 cm UP.")
 print("Make sure there is 10 cm clearance below the gripper.")
 input("Press Enter to start, Ctrl-C to abort ... ")
@@ -57,7 +57,7 @@ with RobotController() as arm:
     print("\nIf dX and dY columns stay near 0.00, the path is straight.")
 
     input("\n[1/2] Execute DOWN move — Press Enter to run, Ctrl-C to abort ... ")
-    arm.move_straight_line(end_joints, steps=20)
+    arm.transit(end_joints)
 
     actual = arm.get_joints_deg()
     actual_xyz = ik.fk(actual)
@@ -65,7 +65,7 @@ with RobotController() as arm:
     print(f"  Z dropped: {(z0 - actual_xyz[2])*100:.1f} cm  (expected ~10.0 cm)")
 
     input("\n[2/2] Execute UP move back to start — Press Enter to run, Ctrl-C to abort ... ")
-    arm.move_straight_line(start_joints, steps=20)
+    arm.transit(start_joints)
 
     actual2 = arm.get_joints_deg()
     actual2_xyz = ik.fk(actual2)
