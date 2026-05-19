@@ -7,28 +7,50 @@ Usage:
 
 import time
 from robot_controller import RobotController
+from robot_logger import RobotLogger
+
+OPEN_MM      = 70.0
+OPEN_MIN_MM  = 50.0   # must reach at least this to count as open
+CLOSE_MAX_MM =  5.0   # must reach at most this to count as closed
 
 
 def main():
-    print("Gripper test — connecting ...")
-    with RobotController() as arm:
-        print("[1/4] Moving to home ...")
-        arm.home()
-        time.sleep(0.5)
+    with RobotLogger("test_gripper") as log:
+        with RobotController() as arm:
 
-        print("[2/4] Opening gripper ...")
-        arm.open_gripper()
-        time.sleep(1.0)
+            with log.test("Read gripper — plausible value"):
+                mm = arm.get_gripper_mm()
+                log.check("in range (0, 70) mm", 0 <= mm <= 70,
+                          expected="(0, 70)", actual=f"{mm:.1f} mm")
 
-        print("[3/4] Closing gripper ...")
-        arm.close_gripper()
-        time.sleep(1.0)
+            with log.test("Home position"):
+                arm.home()
+                time.sleep(0.5)
+                log.info("home reached")
 
-        print("[4/4] Opening gripper again ...")
-        arm.open_gripper()
-        time.sleep(0.5)
+            with log.test("Open gripper"):
+                arm.open_gripper()
+                time.sleep(1.0)
+                mm = arm.get_gripper_mm()
+                log.check(f"opening >= {OPEN_MIN_MM} mm",
+                          mm >= OPEN_MIN_MM,
+                          expected=f">= {OPEN_MIN_MM}", actual=f"{mm:.1f} mm")
 
-    print("Done. Gripper test passed.")
+            with log.test("Close gripper"):
+                arm.close_gripper()
+                time.sleep(1.0)
+                mm = arm.get_gripper_mm()
+                log.check(f"opening <= {CLOSE_MAX_MM} mm",
+                          mm <= CLOSE_MAX_MM,
+                          expected=f"<= {CLOSE_MAX_MM}", actual=f"{mm:.1f} mm")
+
+            with log.test("Re-open gripper"):
+                arm.open_gripper()
+                time.sleep(1.0)
+                mm = arm.get_gripper_mm()
+                log.check(f"opening >= {OPEN_MIN_MM} mm",
+                          mm >= OPEN_MIN_MM,
+                          expected=f">= {OPEN_MIN_MM}", actual=f"{mm:.1f} mm")
 
 
 if __name__ == "__main__":
