@@ -3,15 +3,22 @@ robot:
 
   # Move speed as percentage 0-100 (applied to all motions).
   # Start low — increase only after verifying motion is correct.
-  speed_pct: 20
+  speed_pct: 10
 
   # How far above the target to hover before descending (metres)
-  approach_clearance_m: 0.10
+  approach_clearance_m: 0.05
 
   # Gripper open distance in mm (Piper finger gripper max ~70 mm)
   gripper_open_mm: 70.0
+  # Soft-contact position before full squeeze (mm). Tune to wing cross-section width.
+  gripper_contact_mm: 30.0
   # Grip force in N/m (0–5 N/m → 0–5000 in SDK units)
-  gripper_effort_nm: 0.5
+  gripper_effort_nm: 2.0
+
+  # Extra depth to sink below the vision-estimated z (metres) to ensure jaw contact.
+  descend_sink_m: 0.004
+  # Height above pick z for the partial lift used to verify the grasp (metres).
+  verify_lift_m: 0.03
 
   # Drop zone in robot base frame (metres). Tune to your physical setup.
   drop_zone_xyz_m: [-0.0066, -0.4797, 0.1525]
