@@ -1,9 +1,9 @@
 """
-Step 1: Verify CAN is up and the arm responds.
+Verify CAN is up and the arm is ready to receive commands.
 Run BEFORE any motion tests.
 
 Usage:
-    bash setup_can.sh && python3 test_connection.py
+    python tests/test_connection.py
 """
 
 import sys, os
@@ -22,37 +22,29 @@ def main():
             arm.ConnectPort()
             log.info("ConnectPort() returned without error")
 
-        with log.test("Switch to slave mode"):
+
+        with log.test("Arm enables"):
             arm.MasterSlaveConfig(0xFC, 0, 0, 0)
             time.sleep(0.1)
-            log.info("MasterSlaveConfig sent")
+            arm.MotionCtrl_1(0x00, 0x00, 0x02)
+            time.sleep(0.1)
+            arm.EnableArm(7)
 
-        with log.test("Arm responds over CAN"):
-            time.sleep(0.5)
-            s  = arm.GetArmStatus()
-            j  = arm.GetArmJointMsgs()
-            as_ = s.arm_status
-            log.info(
-                f"ctrl={as_.ctrl_mode:#04x}  status={as_.arm_status:#04x}  "
-                f"motion={as_.motion_status}  err={as_.err_status}"
-            )
-            joints = [
-                j.joint_state.joint_1, j.joint_state.joint_2, j.joint_state.joint_3,
-                j.joint_state.joint_4, j.joint_state.joint_5, j.joint_state.joint_6,
-            ]
-            log.info(
-                "joints: " + "  ".join(f"J{i+1}={v/1000:.1f}°" for i, v in enumerate(joints))
-            )
+            deadline = time.time() + 5.0
+            enabled = False
+            while time.time() < deadline:
+                if all(arm.GetArmEnableStatus()):
+                    enabled = True
+                    break
+                arm.EnableArm(7)
+                time.sleep(0.1)
+
+            status = arm.GetArmEnableStatus()
+            log.info(f"enable status per motor: {list(status)}")
             log.check(
-                "at least one joint non-zero",
-                not all(v == 0 for v in joints),
-                expected="any non-zero",
-                actual=joints,
-            )
-            log.check(
-                "ctrl mode is CAN (0x01) not teach (0x02)",
-                as_.ctrl_mode == 0x01,
-                expected="0x01", actual=f"{as_.ctrl_mode:#04x}",
+                "all motors enabled within 5 s",
+                enabled,
+                expected="all True", actual=list(status),
             )
 
 

@@ -1,14 +1,4 @@
-"""
-Read the current end-effector XYZ position and orientation.
-
-Usage
------
-  python read_pose.py
-
-Enter teach mode, move arm to the position you want to pick from,
-then press Enter — the script prints the XYZ and orientation values
-you can paste directly into test_pick.py.
-"""
+"""Read the current end-effector pose and joint angles."""
 
 import time
 from piper_sdk import C_PiperInterface
@@ -18,7 +8,7 @@ arm.ConnectPort()
 arm.MasterSlaveConfig(0xFC, 0, 0, 0)
 time.sleep(0.2)
 
-input("Enter teach mode, move arm to the desired position. Press Enter to read pose ... ")
+input("Move arm to position. Press Enter to read pose ... ")
 
 # End-effector XYZ + orientation
 p    = arm.GetArmEndPoseMsgs().end_pose
@@ -48,5 +38,4 @@ print(f"\nJoint angles:")
 for i, deg in enumerate(joints):
     print(f"  J{i+1} = {deg:.2f}°")
 
-print(f"\nPaste into test_pick.py:")
-print(f"  joints = {[round(d, 2) for d in joints]}")
+print(f"\n  {[round(d, 2) for d in joints]}")

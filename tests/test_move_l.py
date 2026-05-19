@@ -32,12 +32,12 @@ with RobotController() as arm:
     print(f"              rx={rx:.2f}°  ry={ry:.2f}°  rz={rz:.2f}°")
 
     input("\n[1/2] Move 20 cm straight DOWN — Press Enter to run ... ")
-    arm.move_cartesian(x, y, z - 0.20)
+    arm.stroke(x, y, z - 0.20)
     p2 = arm._arm.GetArmEndPoseMsgs().end_pose
-    print(f"  After: z={p2.Z_axis/1_000_000:.4f}m  (expected ~{z-0.04:.4f}m)")
+    print(f"  After: z={p2.Z_axis/1_000_000:.4f}m  (expected ~{z-0.20:.4f}m)")
 
     input("\n[2/2] Move back UP to original height — Press Enter to run ... ")
-    arm.move_cartesian(x, y, z)
+    arm.stroke(x, y, z)
     p3 = arm._arm.GetArmEndPoseMsgs().end_pose
     print(f"  After: z={p3.Z_axis/1_000_000:.4f}m  (expected ~{z:.4f}m)")
 

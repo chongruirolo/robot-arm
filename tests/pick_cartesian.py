@@ -131,4 +131,4 @@ class PickCartesian:
         zs = np.linspace(cz, tz, n_steps + 1)[1:]
 
         for i, (sx, sy, sz) in enumerate(zip(xs, ys, zs)):
-            self._arm.move_cartesian(sx, sy, sz, self._rx, self._ry, self._rz)
+            self._arm.stroke(sx, sy, sz, self._rx, self._ry, self._rz)
